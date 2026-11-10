@@ -7,7 +7,9 @@
   const VEHICLES_KEY = "carnes-erdella-camiones-v1";
   const ACCESS_USER = "goikola";
   const ACCESS_PASSWORD = "2828";
-  const ADMIN_USER = "soraya";
+  const ADMIN_USER = "soraya@transporteserdella.com";
+  // Firebase keeps the original technical account because its database rule
+  // is tied to that identity. Administrators sign in with ADMIN_USER above.
   const ADMIN_EMAIL = "soraya@carnes-erdella.local";
   const TRUCK_TYPES = ["Rigido", "Camión y remolque", "Trailer", "Mega", "DuoTrailer"];
   const FIREBASE_API_KEY = "AIzaSyBjT_49FR1Fxq6kuph4n8L2SGje1WxYxJs";
