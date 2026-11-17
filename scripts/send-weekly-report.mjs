@@ -1,10 +1,20 @@
-import admin from "firebase-admin";
 import ExcelJS from "exceljs";
 import nodemailer from "nodemailer";
 import { pathToFileURL } from "node:url";
 
 const ZONE = "Europe/Madrid";
 const DATABASE_URL = "https://partes-trabajo-erdella-default-rtdb.europe-west1.firebasedatabase.app";
+
+async function databaseRequest(path, method = "GET", body) {
+  const secret = process.env.FIREBASE_DATABASE_SECRET;
+  const response = await fetch(`${DATABASE_URL}/${path}.json?auth=${encodeURIComponent(secret)}`, {
+    method,
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  if (!response.ok) throw new Error(`Firebase respondió ${response.status} en ${path}.`);
+  return response.json();
+}
 
 function localIsoDate(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: ZONE, year: "numeric", month: "2-digit", day: "2-digit" })
@@ -69,14 +79,11 @@ export async function workbookBuffer(records) {
 }
 
 async function main() {
-  const required = ["FIREBASE_SERVICE_ACCOUNT", "SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM", "MAIL_TO"];
+  const required = ["FIREBASE_DATABASE_SECRET", "SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM", "MAIL_TO"];
   for (const name of required) if (!process.env[name]) throw new Error(`Falta el secreto ${name}.`);
   const period = previousCompleteWeek(localIsoDate());
-  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount), databaseURL: DATABASE_URL });
-  const database = admin.database();
   const forced = process.env.FORCE_SEND === "true";
-  const devices = (await database.ref("sorayaDevices").once("value")).val() || {};
+  const devices = await databaseRequest("sorayaDevices") || {};
   const transport = nodemailer.createTransport({
     host: process.env.SMTP_HOST, port: Number(process.env.SMTP_PORT || 465),
     secure: Number(process.env.SMTP_PORT || 465) === 465,
@@ -85,8 +92,8 @@ async function main() {
   await transport.verify();
   let sent = 0;
   for (const [uid, device] of Object.entries(devices)) {
-    const markerRef = database.ref(`weeklyExports/${period.start}/${uid}`);
-    if (!forced && (await markerRef.once("value")).exists()) continue;
+    const markerPath = `weeklyExports/${period.start}/${uid}`;
+    if (!forced && await databaseRequest(markerPath)) continue;
     const records = Object.values(device.records || {})
       .filter(record => record.date >= period.start && record.date <= period.end)
       .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.startTime).localeCompare(String(b.startTime)));
@@ -101,7 +108,7 @@ async function main() {
       text: `Se adjunta el Excel enviado por el dispositivo de ${deviceName}, con sus partes entre ${period.start} y ${period.end}.\n\nPartes incluidos: ${records.length}.`,
       attachments: [{ filename: `partes_${fileLabel}_${period.start}_${period.end}.xlsx`, content }]
     });
-    await markerRef.set({ sentAt: admin.database.ServerValue.TIMESTAMP, end: period.end, records: records.length, messageId: info.messageId || "" });
+    await databaseRequest(markerPath, "PUT", { sentAt: Date.now(), end: period.end, records: records.length, messageId: info.messageId || "" });
     sent++;
   }
   console.log(`Informes enviados: ${sent}. Semana: ${period.start} a ${period.end}.`);
