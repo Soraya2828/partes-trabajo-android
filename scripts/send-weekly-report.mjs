@@ -75,39 +75,36 @@ async function main() {
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
   if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount), databaseURL: DATABASE_URL });
   const database = admin.database();
-  const markerRef = database.ref(`weeklyExports/${period.start}`);
   const forced = process.env.FORCE_SEND === "true";
-  if (!forced && (await markerRef.once("value")).exists()) {
-    console.log(`La semana ${period.start} ya fue enviada.`);
-    return;
-  }
   const devices = (await database.ref("sorayaDevices").once("value")).val() || {};
-  const unique = new Map();
-  for (const device of Object.values(devices)) {
-    for (const record of Object.values(device.records || {})) {
-      if (record.date >= period.start && record.date <= period.end) unique.set(record.id || `${record.date}-${record.worker}-${record.updatedAt}`, record);
-    }
-  }
-  const records = [...unique.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.worker).localeCompare(String(b.worker), "es"));
-  if (!records.length) {
-    console.log(`No hay partes entre ${period.start} y ${period.end}.`);
-    return;
-  }
-  const content = await workbookBuffer(records);
   const transport = nodemailer.createTransport({
     host: process.env.SMTP_HOST, port: Number(process.env.SMTP_PORT || 465),
     secure: Number(process.env.SMTP_PORT || 465) === 465,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD }
   });
   await transport.verify();
-  const info = await transport.sendMail({
-    from: process.env.MAIL_FROM, to: process.env.MAIL_TO,
-    subject: `Partes semanales · ${period.start} a ${period.end}`,
-    text: `Se adjunta el Excel con todos los partes del personal entre ${period.start} y ${period.end}.\n\nPartes incluidos: ${records.length}.`,
-    attachments: [{ filename: `partes_${period.start}_${period.end}.xlsx`, content }]
-  });
-  await markerRef.set({ sentAt: admin.database.ServerValue.TIMESTAMP, end: period.end, records: records.length, messageId: info.messageId || "" });
-  console.log(`Informe enviado con ${records.length} partes.`);
+  let sent = 0;
+  for (const [uid, device] of Object.entries(devices)) {
+    const markerRef = database.ref(`weeklyExports/${period.start}/${uid}`);
+    if (!forced && (await markerRef.once("value")).exists()) continue;
+    const records = Object.values(device.records || {})
+      .filter(record => record.date >= period.start && record.date <= period.end)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.startTime).localeCompare(String(b.startTime)));
+    if (!records.length) continue;
+    const workers = [...new Set(records.map(record => record.worker).filter(Boolean))];
+    const deviceName = workers.join(", ") || device.metadata?.name || uid.slice(0, 8);
+    const fileLabel = deviceName.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 55);
+    const content = await workbookBuffer(records);
+    const info = await transport.sendMail({
+      from: process.env.MAIL_FROM, to: process.env.MAIL_TO,
+      subject: `Partes semanales · ${deviceName} · ${period.start} a ${period.end}`,
+      text: `Se adjunta el Excel enviado por el dispositivo de ${deviceName}, con sus partes entre ${period.start} y ${period.end}.\n\nPartes incluidos: ${records.length}.`,
+      attachments: [{ filename: `partes_${fileLabel}_${period.start}_${period.end}.xlsx`, content }]
+    });
+    await markerRef.set({ sentAt: admin.database.ServerValue.TIMESTAMP, end: period.end, records: records.length, messageId: info.messageId || "" });
+    sent++;
+  }
+  console.log(`Informes enviados: ${sent}. Semana: ${period.start} a ${period.end}.`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
