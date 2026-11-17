@@ -75,7 +75,7 @@
               <option value="">Seleccionar matrícula…</option>
             </select>
           </label>
-          <label>
+          <label class="main-detail-field">
             <span>Tipo de camión</span>
             <select id="vehicleType" required>
               <option value="">Seleccionar tipo…</option>
@@ -86,26 +86,32 @@
               <option value="DuoTrailer">DuoTrailer</option>
             </select>
           </label>
-          <label class="wide">
+          <label class="wide main-detail-field">
             <span>Ruta</span>
             <input id="route" type="text" autocomplete="off" placeholder="Ej.: Carga Sigüeiro" required>
           </label>
-          <label>
+          <label class="main-detail-field">
             <span>Hora inicio</span>
             <input id="startTime" class="start-field" type="time" required>
           </label>
-          <label>
+          <label class="main-detail-field">
             <span>Hora fin</span>
             <input id="endTime" class="end-field" type="time" required>
           </label>
-          <label>
+          <label class="main-detail-field">
             <span>Km iniciales</span>
             <input id="startKm" type="number" min="0" step="1" inputmode="numeric" required>
           </label>
-          <label>
+          <label class="main-detail-field">
             <span>Km finales</span>
             <input id="endKm" type="number" min="0" step="1" inputmode="numeric" required>
           </label>
+          <fieldset id="multipleService" class="wide multiple-service" hidden>
+            <legend>Trabajos de la jornada</legend>
+            <p>Añade una línea por cada trabajo realizado.</p>
+            <div id="serviceLines" class="service-lines"></div>
+            <button id="addServiceLine" class="secondary add-service-line" type="button">Añadir otro trabajo</button>
+          </fieldset>
           <label class="wide">
             <span>Observaciones</span>
             <textarea id="notes" rows="2" placeholder="Opcional"></textarea>
@@ -120,6 +126,56 @@
         <div id="formMessage" class="message" role="status" hidden></div>
         <button class="primary save-button" type="submit">Guardar parte</button>
       </form>
+
+      <template id="serviceLineTemplate">
+        <section class="service-line">
+          <div class="service-line-heading">
+            <strong class="service-line-title">Trabajo</strong>
+            <button class="remove-service-line danger-button" type="button">Quitar línea</button>
+          </div>
+          <div class="form-grid sub-service-grid">
+            <label>
+              <span>Matrícula</span>
+              <select class="service-vehicle" required></select>
+            </label>
+            <label>
+              <span>Tipo de camión</span>
+              <select class="service-vehicle-type" required>
+                <option value="">Seleccionar tipo…</option>
+                <option value="Rigido">Rigido</option>
+                <option value="Camión y remolque">Camión y remolque</option>
+                <option value="Trailer">Trailer</option>
+                <option value="Mega">Mega</option>
+                <option value="DuoTrailer">DuoTrailer</option>
+              </select>
+            </label>
+            <label class="wide">
+              <span>Ruta</span>
+              <input class="service-route" type="text" autocomplete="off" placeholder="Ej.: Carga Sigüeiro" required>
+            </label>
+            <label>
+              <span>Hora inicio</span>
+              <input class="service-start-time start-field" type="time" required>
+            </label>
+            <label>
+              <span>Hora fin</span>
+              <input class="service-end-time end-field" type="time" required>
+            </label>
+            <label>
+              <span>Km iniciales</span>
+              <input class="service-start-km" type="number" min="0" step="1" inputmode="numeric" required>
+            </label>
+            <label>
+              <span>Km finales</span>
+              <input class="service-end-km" type="number" min="0" step="1" inputmode="numeric" required>
+            </label>
+          </div>
+          <div class="calculated extra-calculated" aria-live="polite">
+            <div><span>Horas</span><strong class="service-duration">—</strong></div>
+            <div><span>Km realizados</span><strong class="service-distance">—</strong></div>
+          </div>
+        </section>
+      </template>
     </section>
 
     <section class="panel records-panel" aria-labelledby="recordsTitle">
@@ -224,6 +280,10 @@
         <span class="record-plate"></span>
       </div>
       <p class="record-route"></p>
+      <div class="record-extra" hidden>
+        <strong>Trabajos realizados</strong>
+        <span class="record-extra-detail"></span>
+      </div>
       <div class="record-metrics">
         <span><b class="record-time"></b><small>Horario</small></span>
         <span><b class="record-duration"></b><small>Duración</small></span>
@@ -238,8 +298,11 @@
     </article>
   </template>
 
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
   <script src="data.js?v=2"></script>
-  <script src="xlsx-export.js?v=3"></script>
-  <script src="app.js?v=11"></script>
+  <script src="xlsx-export.js?v=4"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

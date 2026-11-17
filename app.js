@@ -3,8 +3,10 @@
   const STORAGE_KEY = "carnes-erdella-partes-v1";
   const AUTH_KEY = "carnes-erdella-autorizado-v1";
   const LAST_WORKER_KEY = "carnes-erdella-ultimo-trabajador-v1";
+  const DRAFT_KEY = "carnes-erdella-borrador-v1";
   const WORKERS_KEY = "carnes-erdella-trabajadores-v1";
   const VEHICLES_KEY = "carnes-erdella-camiones-v1";
+  const CLOUD_DELETIONS_KEY = "carnes-erdella-borrados-pendientes-v1";
   const ACCESS_USER = "goikola";
   const ACCESS_PASSWORD = "2828";
   const ADMIN_USER = "soraya@transporteserdella.com";
@@ -14,6 +16,15 @@
   const TRUCK_TYPES = ["Rigido", "Camión y remolque", "Trailer", "Mega", "DuoTrailer"];
   const FIREBASE_API_KEY = "AIzaSyBjT_49FR1Fxq6kuph4n8L2SGje1WxYxJs";
   const FIREBASE_DATABASE_URL = "https://partes-trabajo-erdella-default-rtdb.europe-west1.firebasedatabase.app";
+  const FIREBASE_CONFIG = {
+    apiKey: FIREBASE_API_KEY,
+    authDomain: "partes-trabajo-erdella.firebaseapp.com",
+    databaseURL: FIREBASE_DATABASE_URL,
+    projectId: "partes-trabajo-erdella",
+    storageBucket: "partes-trabajo-erdella.firebasestorage.app",
+    messagingSenderId: "466779972722",
+    appId: "1:466779972722:web:14db41bbe079d869408eeb"
+  };
   const $ = (id) => document.getElementById(id);
   const form = $("workForm");
   const fields = {
@@ -28,6 +39,9 @@
   let sharedVehicles = null;
   let catalogRefreshPromise = null;
   let lastCatalogRefresh = 0;
+  let restoringDraft = false;
+  let cloudUser = null;
+  let cloudReadyPromise = null;
 
   function unlockApp() {
     document.body.classList.remove("auth-locked");
@@ -56,6 +70,77 @@
     catch { return []; }
   };
   const writeRecords = (records) => localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  const cloudRecordKey = id => String(id).replace(/[.#$\[\]/]/g, "_");
+  function pendingCloudDeletions() {
+    try { return JSON.parse(localStorage.getItem(CLOUD_DELETIONS_KEY)) || []; }
+    catch { return []; }
+  }
+  function rememberCloudDeletion(id) {
+    localStorage.setItem(CLOUD_DELETIONS_KEY, JSON.stringify([...new Set([...pendingCloudDeletions(), id])]));
+  }
+  function cloudDeviceName() {
+    return localStorage.getItem(LAST_WORKER_KEY) || fields.worker.value || "Dispositivo sin identificar";
+  }
+  function initializeCloudSync() {
+    if (cloudReadyPromise) return cloudReadyPromise;
+    cloudReadyPromise = new Promise(resolve => {
+      if (!window.firebase?.auth || !window.firebase?.database) { resolve(null); return; }
+      try {
+        const app = firebase.apps.length ? firebase.app() : firebase.initializeApp(FIREBASE_CONFIG);
+        const auth = app.auth();
+        auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
+        const stop = auth.onAuthStateChanged(async user => {
+          if (!user) {
+            try { await auth.signInAnonymously(); }
+            catch (error) { console.warn("No se pudo iniciar la sincronización.", error); resolve(null); }
+            return;
+          }
+          stop();
+          cloudUser = user;
+          resolve(user);
+          syncExistingRecords();
+        }, error => { console.warn("No se pudo iniciar la sincronización.", error); resolve(null); });
+      } catch (error) { console.warn("La sincronización no está disponible.", error); resolve(null); }
+    });
+    return cloudReadyPromise;
+  }
+  async function updateCloudMetadata() {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) return false;
+    await firebase.database().ref(`sorayaDevices/${user.uid}/metadata`).update({
+      name: cloudDeviceName(), lastSeen: firebase.database.ServerValue.TIMESTAMP
+    });
+    return true;
+  }
+  async function syncRecord(record) {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) return false;
+    await Promise.all([
+      firebase.database().ref(`sorayaDevices/${user.uid}/records/${cloudRecordKey(record.id)}`).set(record),
+      updateCloudMetadata()
+    ]);
+    return true;
+  }
+  async function removeCloudRecord(id) {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) return false;
+    await firebase.database().ref(`sorayaDevices/${user.uid}/records/${cloudRecordKey(id)}`).remove();
+    localStorage.setItem(CLOUD_DELETIONS_KEY, JSON.stringify(pendingCloudDeletions().filter(item => item !== id)));
+    await updateCloudMetadata();
+    return true;
+  }
+  async function syncExistingRecords() {
+    const user = cloudUser || await initializeCloudSync();
+    if (!user) return;
+    const updates = {};
+    for (const record of readRecords()) updates[`records/${cloudRecordKey(record.id)}`] = record;
+    for (const id of pendingCloudDeletions()) updates[`records/${cloudRecordKey(id)}`] = null;
+    updates["metadata/name"] = cloudDeviceName();
+    updates["metadata/lastSeen"] = firebase.database.ServerValue.TIMESTAMP;
+    firebase.database().ref(`sorayaDevices/${user.uid}`).update(updates).then(() => {
+      localStorage.removeItem(CLOUD_DELETIONS_KEY);
+    }).catch(error => console.warn("Los partes se conservan en el móvil; se sincronizarán cuando haya conexión.", error));
+  }
   const normalizeWorker = (value) => String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
   const normalizePlate = (value) => String(value ?? "").trim().replace(/\s+/g, "").toUpperCase();
   const normalizeVehicleType = (value) => String(value ?? "").trim().replace(/\s+/g, " ");
@@ -163,8 +248,21 @@
     return Number(end) - Number(start);
   }
   function refreshCalculations() {
-    $("duration").textContent = durationLabel(fields.startTime.value, fields.endTime.value);
-    const distance = distanceValue(fields.startKm.value, fields.endKm.value);
+    let startTime = fields.startTime.value;
+    let endTime = fields.endTime.value;
+    let distance = distanceValue(fields.startKm.value, fields.endKm.value);
+    if (fields.vehicle.value === "Varios") {
+      const lines = serviceLines();
+      startTime = lines[0]?.querySelector(".service-start-time").value || "";
+      endTime = lines.at(-1)?.querySelector(".service-end-time").value || "";
+      const distances = lines.map(line => distanceValue(
+        line.querySelector(".service-start-km").value,
+        line.querySelector(".service-end-km").value
+      ));
+      distance = distances.length && distances.every(value => value !== null)
+        ? distances.reduce((total, value) => total + value, 0) : null;
+    }
+    $("duration").textContent = durationLabel(startTime, endTime);
     $("distance").textContent = distance === null ? "—" : `${distance.toLocaleString("es-ES")} km`;
     $("distance").style.color = distance !== null && distance < 0 ? "#a61b1b" : "";
   }
@@ -172,15 +270,66 @@
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   }
-  function resetForm() {
+  function resetForm(clearDraft = true) {
+    if (clearDraft) localStorage.removeItem(DRAFT_KEY);
     form.reset();
     fields.id.value = "";
     fields.date.value = todayLocal();
     const lastWorker = localStorage.getItem(LAST_WORKER_KEY);
     if (lastWorker && readWorkers().includes(lastWorker)) fields.worker.value = lastWorker;
+    toggleMultipleService();
     $("formTitle").textContent = "Nueva jornada";
     $("formMessage").hidden = true;
     refreshCalculations();
+  }
+  function draftServiceLine(line) {
+    return {
+      vehicle: line.querySelector(".service-vehicle").value,
+      vehicleType: line.querySelector(".service-vehicle-type").value,
+      route: line.querySelector(".service-route").value,
+      startTime: line.querySelector(".service-start-time").value,
+      endTime: line.querySelector(".service-end-time").value,
+      startKm: line.querySelector(".service-start-km").value,
+      endKm: line.querySelector(".service-end-km").value
+    };
+  }
+  function saveDraft() {
+    if (restoringDraft) return;
+    const draft = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value]));
+    draft.services = fields.vehicle.value === "Varios" ? serviceLines().map(draftServiceLine) : [];
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  }
+  function restoreDraft() {
+    let draft;
+    try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY)); }
+    catch { return false; }
+    if (!draft || typeof draft !== "object") return false;
+    restoringDraft = true;
+    try {
+      form.reset();
+      fields.id.value = draft.id || "";
+      fields.date.value = draft.date || todayLocal();
+      fields.worker.value = draft.worker || "";
+      fields.vehicle.value = draft.vehicle || "";
+      fields.notes.value = draft.notes || "";
+      toggleMultipleService();
+      if (fields.vehicle.value === "Varios") {
+        $("serviceLines").replaceChildren();
+        const services = Array.isArray(draft.services) ? draft.services : [];
+        if (services.length) services.forEach(createServiceLine); else createServiceLine();
+      } else {
+        fields.vehicleType.value = draft.vehicleType || "";
+        fields.route.value = draft.route || "";
+        fields.startTime.value = draft.startTime || "";
+        fields.endTime.value = draft.endTime || "";
+        fields.startKm.value = draft.startKm ?? "";
+        fields.endKm.value = draft.endKm ?? "";
+      }
+      $("formTitle").textContent = fields.id.value ? "Editar jornada" : "Nueva jornada";
+      $("formMessage").hidden = true;
+      refreshCalculations();
+      return true;
+    } finally { restoringDraft = false; }
   }
   function fillWorkerSelect() {
     const selected = fields.worker.value || localStorage.getItem(LAST_WORKER_KEY) || "";
@@ -193,19 +342,100 @@
     const selected = fields.vehicle.value;
     const selectedType = fields.vehicleType.value;
     fields.vehicle.replaceChildren(new Option("Seleccionar matrícula…", ""));
+    fields.vehicle.add(new Option("Varios", "Varios"));
     const vehicles = readVehicles();
     for (const [plate, type] of vehicles) {
       const option = new Option(plate, plate);
       option.dataset.type = type;
       fields.vehicle.add(option);
     }
-    if (vehicles.some(([plate]) => plate === selected)) fields.vehicle.value = selected;
+    if (selected === "Varios" || vehicles.some(([plate]) => plate === selected)) fields.vehicle.value = selected;
     fields.vehicle.dispatchEvent(new Event("change"));
     if (selectedType) fields.vehicleType.value = selectedType;
+    document.querySelectorAll(".service-vehicle").forEach(select => fillServiceVehicleSelect(select, select.value));
   }
   function fillSelects() {
     fillWorkerSelect();
     fillVehicleSelect();
+  }
+  const serviceLines = () => [...$("serviceLines").querySelectorAll(".service-line")];
+  function fillServiceVehicleSelect(select, selected = "") {
+    select.replaceChildren(new Option("Seleccionar matrícula…", ""));
+    for (const [plate, type] of readVehicles()) {
+      const option = new Option(plate, plate);
+      option.dataset.type = type;
+      select.add(option);
+    }
+    if ([...select.options].some(option => option.value === selected)) select.value = selected;
+  }
+  function renumberServiceLines() {
+    serviceLines().forEach((line, index) => {
+      line.querySelector(".service-line-title").textContent = `Trabajo ${index + 1}`;
+    });
+  }
+  function updateServiceCalculations(line) {
+    const startTime = line.querySelector(".service-start-time").value;
+    const endTime = line.querySelector(".service-end-time").value;
+    const startKm = line.querySelector(".service-start-km").value;
+    const endKm = line.querySelector(".service-end-km").value;
+    line.querySelector(".service-duration").textContent = durationLabel(startTime, endTime);
+    const distance = distanceValue(startKm, endKm);
+    const box = line.querySelector(".service-distance");
+    box.textContent = distance === null ? "—" : `${distance.toLocaleString("es-ES")} km`;
+    box.style.color = distance !== null && distance < 0 ? "#a61b1b" : "";
+    refreshCalculations();
+  }
+  function readServiceLine(line) {
+    return {
+      vehicle: line.querySelector(".service-vehicle").value,
+      vehicleType: line.querySelector(".service-vehicle-type").value,
+      route: line.querySelector(".service-route").value.trim(),
+      startTime: line.querySelector(".service-start-time").value,
+      endTime: line.querySelector(".service-end-time").value,
+      startKm: Number(line.querySelector(".service-start-km").value),
+      endKm: Number(line.querySelector(".service-end-km").value)
+    };
+  }
+  function createServiceLine(data = {}) {
+    const line = $("serviceLineTemplate").content.firstElementChild.cloneNode(true);
+    const vehicle = line.querySelector(".service-vehicle");
+    const vehicleType = line.querySelector(".service-vehicle-type");
+    fillServiceVehicleSelect(vehicle, data.vehicle || "");
+    vehicleType.value = data.vehicleType || "";
+    line.querySelector(".service-route").value = data.route || "";
+    line.querySelector(".service-start-time").value = data.startTime || "";
+    line.querySelector(".service-end-time").value = data.endTime || "";
+    line.querySelector(".service-start-km").value = data.startKm ?? "";
+    line.querySelector(".service-end-km").value = data.endKm ?? "";
+    vehicle.addEventListener("change", () => {
+      const suggested = vehicle.selectedOptions[0]?.dataset.type || "";
+      vehicleType.value = TRUCK_TYPES.includes(suggested) ? suggested : "";
+      saveDraft();
+    });
+    line.querySelectorAll("input, select").forEach(input => input.addEventListener("input", () => {
+      updateServiceCalculations(line); saveDraft();
+    }));
+    line.querySelector(".remove-service-line").addEventListener("click", () => {
+      line.remove();
+      if (!serviceLines().length && fields.vehicle.value === "Varios") createServiceLine();
+      renumberServiceLines(); refreshCalculations(); saveDraft();
+    });
+    $("serviceLines").append(line);
+    updateServiceCalculations(line);
+    renumberServiceLines();
+    return line;
+  }
+  function toggleMultipleService() {
+    const multiple = fields.vehicle.value === "Varios";
+    $("multipleService").hidden = !multiple;
+    document.querySelectorAll(".main-detail-field").forEach(label => { label.hidden = multiple; });
+    [fields.vehicleType, fields.route, fields.startTime, fields.endTime, fields.startKm, fields.endKm].forEach(input => {
+      input.required = !multiple;
+      if (multiple) input.value = "";
+    });
+    if (multiple && !serviceLines().length) createServiceLine();
+    if (!multiple) $("serviceLines").replaceChildren();
+    refreshCalculations();
   }
   function showAdminMessage(text, error = false) {
     const box = $("adminMessage");
@@ -283,24 +513,33 @@
     if (admin && !adminUnlocked) $("adminUser").focus();
   }
   function currentRecord() {
+    const multiple = fields.vehicle.value === "Varios";
+    const services = multiple ? serviceLines().map(readServiceLine) : [];
     return {
       id: fields.id.value || (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
       date: fields.date.value,
       worker: fields.worker.value,
-      vehicle: fields.vehicle.value,
-      vehicleType: fields.vehicleType.value,
-      route: fields.route.value.trim(),
-      startTime: fields.startTime.value,
-      endTime: fields.endTime.value,
-      startKm: Number(fields.startKm.value),
-      endKm: Number(fields.endKm.value),
+      vehicle: multiple ? "Varios" : fields.vehicle.value,
+      vehicleType: multiple ? "" : fields.vehicleType.value,
+      route: multiple ? "Varios trabajos" : fields.route.value.trim(),
+      startTime: multiple ? (services[0]?.startTime || "") : fields.startTime.value,
+      endTime: multiple ? (services.at(-1)?.endTime || "") : fields.endTime.value,
+      startKm: multiple ? null : Number(fields.startKm.value),
+      endKm: multiple ? null : Number(fields.endKm.value),
+      services,
       notes: fields.notes.value.trim(),
       updatedAt: new Date().toISOString()
     };
   }
   function validateRecord(record) {
-    if (record.endKm < record.startKm) return "Los kilómetros finales no pueden ser menores que los iniciales.";
-    if (minutesBetween(record.startTime, record.endTime) === 0) return "La hora de inicio y la hora de fin no pueden ser iguales.";
+    if (record.vehicle !== "Varios" && record.endKm < record.startKm) return "Los kilómetros finales no pueden ser menores que los iniciales.";
+    if (record.vehicle !== "Varios" && minutesBetween(record.startTime, record.endTime) === 0) return "La hora de inicio y la hora de fin no pueden ser iguales.";
+    if (record.vehicle === "Varios" && !record.services.length) return "Añade al menos una línea de trabajo.";
+    for (let index = 0; index < record.services.length; index++) {
+      const service = record.services[index];
+      if (service.endKm < service.startKm) return `Los kilómetros finales del trabajo ${index + 1} no pueden ser menores que los iniciales.`;
+      if (minutesBetween(service.startTime, service.endTime) === 0) return `La hora de inicio y fin del trabajo ${index + 1} no pueden ser iguales.`;
+    }
     return "";
   }
   function showMessage(text, error = false) {
@@ -321,6 +560,7 @@
     if (index >= 0) records[index] = record; else records.push(record);
     writeRecords(records);
     localStorage.setItem(LAST_WORKER_KEY, record.worker);
+    syncRecord(record).catch(error => console.warn("El parte queda pendiente de sincronizar.", error));
     resetForm();
     showMessage(index >= 0 ? "Parte actualizado correctamente." : "Parte guardado correctamente.");
     renderRecords();
@@ -331,21 +571,34 @@
     for (const key of Object.keys(fields)) if (key in record) fields[key].value = record[key];
     fields.id.value = record.id;
     $("formTitle").textContent = "Editar jornada";
-    fields.vehicle.dispatchEvent(new Event("change"));
-    fields.vehicleType.value = record.vehicleType || "";
+    toggleMultipleService();
+    if (record.vehicle === "Varios") {
+      $("serviceLines").replaceChildren();
+      const services = Array.isArray(record.services) ? record.services : [];
+      if (services.length) services.forEach(createServiceLine); else createServiceLine();
+    } else {
+      fields.vehicle.dispatchEvent(new Event("change"));
+      fields.vehicleType.value = record.vehicleType || "";
+    }
     refreshCalculations();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   function deleteRecord(id) {
     if (!confirm("¿Eliminar este parte de trabajo?")) return;
     writeRecords(readRecords().filter(item => item.id !== id));
+    rememberCloudDeletion(id);
+    removeCloudRecord(id).catch(error => console.warn("La eliminación queda pendiente de sincronizar.", error));
     renderRecords();
   }
   async function shareRecord(id) {
     const r = readRecords().find(item => item.id === id);
     if (!r) return;
-    const distance = r.endKm - r.startKm;
-    const text = `Parte ${formatDate(r.date)}\n${r.worker}\n${r.vehicle} · ${r.vehicleType || "Tipo sin indicar"}\n${r.route}\n${r.startTime}–${r.endTime} (${durationLabel(r.startTime, r.endTime)})\n${distance} km`;
+    const services = r.vehicle === "Varios" && Array.isArray(r.services) ? r.services : [];
+    const distance = services.length ? services.reduce((sum, service) => sum + service.endKm - service.startKm, 0) : r.endKm - r.startKm;
+    let text = `Parte ${formatDate(r.date)}\n${r.worker}\n${r.vehicle === "Varios" ? "Varios trabajos" : `${r.vehicle} · ${r.vehicleType || "Tipo sin indicar"}`}\n${r.route}\n${r.startTime}–${r.endTime} (${durationLabel(r.startTime, r.endTime)})\n${distance} km`;
+    services.forEach((service, index) => {
+      text += `\n\nTrabajo ${index + 1}: ${service.vehicle} · ${service.vehicleType}\n${service.route}\n${service.startTime}–${service.endTime}\n${service.endKm - service.startKm} km`;
+    });
     if (navigator.share) await navigator.share({ title: "Parte de trabajo", text }).catch(() => {});
     else await navigator.clipboard.writeText(text).then(() => alert("Parte copiado al portapapeles."));
   }
@@ -366,11 +619,20 @@
       card.dataset.id = record.id;
       card.querySelector(".record-date").textContent = formatDate(record.date);
       card.querySelector(".record-worker").textContent = record.worker;
-      card.querySelector(".record-plate").textContent = record.vehicleType ? `${record.vehicle} · ${record.vehicleType}` : record.vehicle;
+      const services = record.vehicle === "Varios" && Array.isArray(record.services) ? record.services : [];
+      card.querySelector(".record-plate").textContent = services.length ? "Varias matrículas" : (record.vehicleType ? `${record.vehicle} · ${record.vehicleType}` : record.vehicle);
       card.querySelector(".record-route").textContent = record.route;
       card.querySelector(".record-time").textContent = `${record.startTime}–${record.endTime}`;
       card.querySelector(".record-duration").textContent = durationLabel(record.startTime, record.endTime);
-      card.querySelector(".record-km").textContent = `${(record.endKm - record.startKm).toLocaleString("es-ES")} km`;
+      const distance = services.length ? services.reduce((sum, service) => sum + service.endKm - service.startKm, 0) : record.endKm - record.startKm;
+      card.querySelector(".record-km").textContent = `${distance.toLocaleString("es-ES")} km`;
+      if (services.length) {
+        const extra = card.querySelector(".record-extra");
+        extra.hidden = false;
+        extra.querySelector(".record-extra-detail").textContent = services.map((service, index) =>
+          `${index + 1}. ${service.vehicle} · ${service.route} · ${service.startTime}–${service.endTime} · ${(service.endKm - service.startKm).toLocaleString("es-ES")} km`
+        ).join("\n");
+      }
       card.querySelector(".record-notes").textContent = record.notes;
       card.querySelector(".edit-record").addEventListener("click", () => editRecord(record.id));
       card.querySelector(".share-record").addEventListener("click", () => shareRecord(record.id));
@@ -385,17 +647,23 @@
   }
 
   initializeAccess();
+  initializeCloudSync();
   fillSelects();
-  resetForm();
+  if (!restoreDraft()) resetForm(false);
   renderRecords();
   refreshSharedCatalog(true);
   form.addEventListener("submit", saveRecord);
+  form.addEventListener("input", saveDraft);
+  form.addEventListener("change", saveDraft);
   $("newButton").addEventListener("click", resetForm);
   [fields.startTime, fields.endTime, fields.startKm, fields.endKm].forEach(el => el.addEventListener("input", refreshCalculations));
   fields.vehicle.addEventListener("change", () => {
+    toggleMultipleService();
+    if (fields.vehicle.value === "Varios") return;
     const suggestedType = fields.vehicle.selectedOptions[0]?.dataset.type || "";
     fields.vehicleType.value = TRUCK_TYPES.includes(suggestedType) ? suggestedType : "";
   });
+  $("addServiceLine").addEventListener("click", () => { createServiceLine(); saveDraft(); });
   $("monthFilter").addEventListener("change", renderRecords);
   $("clearFilter").addEventListener("click", () => { $("monthFilter").value = ""; renderRecords(); });
   $("exportButton").addEventListener("click", exportExcel);

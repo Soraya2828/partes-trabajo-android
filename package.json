@@ -1,0 +1,15 @@
+{
+  "name": "partes-trabajo-soraya",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "send-weekly": "node scripts/send-weekly-report.mjs",
+    "check": "node --check app.js && node --check xlsx-export.js && node --check scripts/send-weekly-report.mjs && node scripts/test-weekly-report.mjs"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "firebase-admin": "^13.5.0",
+    "nodemailer": "^7.0.10"
+  }
+}

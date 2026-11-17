@@ -96,23 +96,36 @@
     return name;
   }
   function build(records, minutesBetween) {
-    const headers = ["FECHA", "TRABAJADOR", "MATRÍCULA", "TIPO DE CAMIÓN", "RUTA", "HORA INICIO", "HORA FIN", "DURACIÓN (MIN)", "KM INICIALES", "KM FINALES", "KM REALIZADOS", "OBSERVACIONES"];
+    const headers = ["FECHA", "TRABAJADOR", "LÍNEA", "MATRÍCULA", "TIPO DE CAMIÓN", "RUTA", "HORA INICIO", "HORA FIN", "DURACIÓN (MIN)", "KM INICIALES", "KM FINALES", "KM REALIZADOS", "OBSERVACIONES"];
     const headerCells = headers.map((value, i) => textCell(`${columnName(i + 1)}1`, value, 1)).join("");
-    const rows = records.map((r, index) => {
+    const rowData = [];
+    for (const record of records) {
+      const services = record.vehicle === "Varios" && Array.isArray(record.services) && record.services.length ? record.services : [record];
+      const totalKm = services.reduce((sum, service) => sum + Number(service.endKm || 0) - Number(service.startKm || 0), 0);
+      rowData.push({ record, service: { ...record, vehicle: "", vehicleType: "" }, line: "RESUMEN", notes: record.notes, summaryDistance: totalKm });
+      services.forEach((service, index) => rowData.push({ record, service, line: index + 1, notes: "" }));
+    }
+    const rows = rowData.map(({ record, service, line, notes, summaryDistance }, index) => {
       const n = index + 2;
-      const values = [r.date, r.worker, r.vehicle, r.vehicleType, r.route, r.startTime, r.endTime];
+      const values = [record.date, record.worker, String(line), service.vehicle, service.vehicleType, service.route, service.startTime, service.endTime];
       let cells = values.map((value, i) => textCell(`${columnName(i + 1)}${n}`, value)).join("");
-      cells += numberCell(`H${n}`, minutesBetween(r.startTime, r.endTime));
-      cells += numberCell(`I${n}`, r.startKm);
-      cells += numberCell(`J${n}`, r.endKm);
-      cells += numberCell(`K${n}`, r.endKm - r.startKm);
-      cells += textCell(`L${n}`, r.notes);
+      cells += numberCell(`I${n}`, minutesBetween(service.startTime, service.endTime));
+      if (summaryDistance === undefined) {
+        cells += numberCell(`J${n}`, service.startKm);
+        cells += numberCell(`K${n}`, service.endKm);
+        cells += numberCell(`L${n}`, service.endKm - service.startKm);
+      } else {
+        cells += textCell(`J${n}`, "");
+        cells += textCell(`K${n}`, "");
+        cells += numberCell(`L${n}`, summaryDistance);
+      }
+      cells += textCell(`M${n}`, notes);
       return `<row r="${n}">${cells}</row>`;
     }).join("");
     const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>
-<col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="34" customWidth="1"/><col min="3" max="4" width="20" customWidth="1"/><col min="5" max="5" width="34" customWidth="1"/><col min="6" max="8" width="16" customWidth="1"/><col min="9" max="11" width="16" customWidth="1"/><col min="12" max="12" width="35" customWidth="1"/></cols>
-<sheetData><row r="1" ht="28" customHeight="1">${headerCells}</row>${rows}</sheetData><autoFilter ref="A1:L${records.length + 1}"/></worksheet>`;
+<col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="34" customWidth="1"/><col min="3" max="3" width="10" customWidth="1"/><col min="4" max="5" width="20" customWidth="1"/><col min="6" max="6" width="34" customWidth="1"/><col min="7" max="9" width="16" customWidth="1"/><col min="10" max="12" width="16" customWidth="1"/><col min="13" max="13" width="35" customWidth="1"/></cols>
+<sheetData><row r="1" ht="28" customHeight="1">${headerCells}</row>${rows}</sheetData><autoFilter ref="A1:M${rowData.length + 1}"/></worksheet>`;
     const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Aptos"/></font><font><b/><color rgb="FF111827"/><sz val="10"/><name val="Aptos"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF200"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFill="1" applyFont="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>`;
     const files = [

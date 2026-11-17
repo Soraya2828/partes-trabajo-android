@@ -5,6 +5,9 @@ Contenido
 - Funciona sin conexión después de instalarse.
 - Guarda los partes en el propio teléfono.
 - Exporta siempre los registros en un archivo Excel real (.xlsx).
+- Al elegir "Varios" en matrícula permite añadir varias líneas con ruta, matrícula, tipo de camión, horario y kilómetros.
+- Conserva automáticamente el parte en curso aunque se cierre la aplicación.
+- Envía cada lunes a Soraya un Excel conjunto con los partes de todo el personal de la semana anterior.
 - Incluye 73 trabajadores y 53 matrículas.
 
 INSTALACIÓN EN ANDROID
@@ -16,10 +19,8 @@ INSTALACIÓN EN ANDROID
 4. La aplicación quedará como un icono normal y funcionará sin conexión.
 
 IMPORTANTE
-- Los datos se almacenan únicamente en el navegador del teléfono.
-- Antes de borrar datos de Chrome o cambiar de móvil, use "Exportar a Excel".
-- Para compartir datos entre varios teléfonos haría falta añadir un servidor
-  o una base de datos central.
+- Los datos se guardan en el teléfono y se sincronizan con la base de datos central cuando hay conexión.
+- Antes de borrar datos de Chrome o cambiar de móvil, también puede usar "Exportar a Excel" como copia adicional.
 
 PRUEBA EN UN ORDENADOR
 No abra index.html directamente. Sirva la carpeta con un servidor local HTTPS

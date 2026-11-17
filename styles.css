@@ -63,6 +63,16 @@ textarea { resize: vertical; }
 input:focus, select:focus, textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(23, 79, 122, .13); }
 .start-field { background: var(--start); }
 .end-field { background: var(--end); }
+.multiple-service { margin: 2px 0; border: 1px solid #9ab7cb; border-radius: 14px; padding: 14px; background: #f2f8fc; }
+.multiple-service legend { padding: 0 7px; color: var(--blue-dark); font-weight: 850; }
+.multiple-service > p { margin: 0 0 14px; color: var(--muted); font-size: .82rem; }
+.service-lines { display: grid; gap: 14px; }
+.service-line { border: 1px solid #c2d7e5; border-radius: 12px; padding: 12px; background: white; }
+.service-line-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.service-line-title { color: var(--blue-dark); }
+.add-service-line { width: 100%; margin-top: 14px; }
+.sub-service-grid { gap: 12px; }
+.extra-calculated { margin-bottom: 0; }
 
 .calculated { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0; }
 .calculated div { border-radius: 12px; background: #edf1f4; padding: 12px 14px; }
@@ -87,6 +97,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--blue); box-shado
 .record-worker { margin-top: 3px; color: var(--muted); font-size: .78rem; }
 .record-plate { border-radius: 999px; padding: 5px 9px; background: var(--yellow); font-weight: 800; font-size: .78rem; white-space: nowrap; }
 .record-route { margin: 12px 0; font-weight: 700; }
+.record-extra { display: grid; gap: 5px; margin: 10px 0; border-radius: 10px; padding: 10px; background: #eef6fb; }
+.record-extra[hidden] { display: none; }
+.record-extra strong { color: var(--blue-dark); font-size: .78rem; }
+.record-extra span { white-space: pre-line; color: var(--muted); font-size: .76rem; line-height: 1.45; }
 .record-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .record-metrics span { padding: 9px; border-radius: 9px; background: #f2f5f7; text-align: center; }
 .record-metrics b, .record-metrics small { display: block; }
